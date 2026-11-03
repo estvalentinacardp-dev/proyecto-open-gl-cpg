@@ -1,0 +1,14 @@
+# Visual Studio user cache and generated build files
+.vs/
+x64/
+Debug/
+Release/
+**/Debug/
+**/Release/
+*.suo
+*.pdb
+*.ilk
+*.obj
+*.idb
+*.tlog/
+imgui.ini
