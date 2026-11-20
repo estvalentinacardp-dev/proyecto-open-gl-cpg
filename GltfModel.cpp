@@ -78,6 +78,7 @@ void collectNodeBounds(const tinygltf::Model& model, int nodeIndex, const glm::m
     }
     for (int child : node.children) collectNodeBounds(model, child, world, minimum, maximum, hasBounds);
 }
+// Función auxiliar para obtener la textura de un material
 
 GLuint textureFor(const tinygltf::Model& model, const std::vector<GLuint>& textures, int textureIndex)
 {
@@ -87,9 +88,10 @@ GLuint textureFor(const tinygltf::Model& model, const std::vector<GLuint>& textu
     return textures[image];
 }
 }
-
+// Función auxiliar para obtener la matriz normal de un modelo
 bool GltfModel::load(const std::string& path)
 {
+	// Liberar recursos previos si se cargó un modelo antes
     destroy();
     auto parsedModel = std::make_unique<tinygltf::Model>();
     tinygltf::TinyGLTF loader;
@@ -99,9 +101,10 @@ bool GltfModel::load(const std::string& path)
         error_ = "No se pudo cargar glTF: " + error_;
         return false;
     }
+	// Advertencias de carga se muestran en la consola, pero no detienen la carga
     if (!warning.empty()) std::cerr << "glTF: " << warning << '\n';
     model_ = parsedModel.release();
-
+	// Cargar texturas de imágenes
     imageTextures_.resize(model_->images.size(), 0);
     std::vector<bool> usedImages(model_->images.size(), false);
     for (const auto& material : model_->materials) {
@@ -113,6 +116,7 @@ bool GltfModel::load(const std::string& path)
             }
         }
     }
+	// Crear texturas OpenGL para las imágenes utilizadas
     for (size_t i = 0; i < model_->images.size(); ++i) {
         if (!usedImages[i]) continue;
         const auto& image = model_->images[i];
@@ -135,12 +139,13 @@ bool GltfModel::load(const std::string& path)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         imageTextures_[i] = texture;
     }
+	// Liberar memoria de imágenes cargadas en CPU
     for (auto& image : model_->images) {
         image.image.clear();
         image.image.shrink_to_fit();
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-
+	// Cargar materiales
     materials_.resize(std::max<size_t>(1, model_->materials.size()));
     for (size_t i = 0; i < model_->materials.size(); ++i) {
         const auto& source = model_->materials[i];
@@ -156,7 +161,7 @@ bool GltfModel::load(const std::string& path)
         target.alphaMask = source.alphaMode == "MASK";
         target.alphaCutoff = static_cast<float>(source.alphaCutoff);
     }
-
+	// Cargar mallas y primitivos
     meshes_.resize(model_->meshes.size());
     for (size_t meshIndex = 0; meshIndex < model_->meshes.size(); ++meshIndex) {
         const auto& mesh = model_->meshes[meshIndex];
@@ -169,7 +174,7 @@ bool GltfModel::load(const std::string& path)
             size_t positionStride = 0;
             const unsigned char* positionBytes = accessorData(*model_, positions, positionStride);
             if (!positionBytes) continue;
-
+			// Obtener datos de UV, color y normales si están presentes
             const auto uvIt = primitive.attributes.find("TEXCOORD_0");
             const tinygltf::Accessor* uvs = uvIt == primitive.attributes.end() ? nullptr : &model_->accessors[uvIt->second];
             size_t uvStride = 0;
@@ -182,30 +187,33 @@ bool GltfModel::load(const std::string& path)
             const tinygltf::Accessor* normals = normalIt == primitive.attributes.end() ? nullptr : &model_->accessors[normalIt->second];
             size_t normalStride = 0;
             const unsigned char* normalBytes = normals ? accessorData(*model_, *normals, normalStride) : nullptr;
-
+			// Preparar datos de vértices para OpenGL
             constexpr size_t vertexStride = 12;
             std::vector<float> vertices(positions.count * vertexStride, 0.0f);
             for (size_t i = 0; i < positions.count; ++i) {
+				// Copiar posición
                 const auto* p = reinterpret_cast<const float*>(positionBytes + i * positionStride);
                 float* v = vertices.data() + i * vertexStride;
                 v[0] = p[0]; v[1] = p[1]; v[2] = p[2];
-                v[3] = v[4] = v[5] = v[6] = 1.0f;
+				v[3] = v[4] = v[5] = v[6] = 1.0f; // Color por defecto blanco
+				// Copiar UV si están presentes
                 if (uvs && uvBytes && uvs->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && uvs->type == TINYGLTF_TYPE_VEC2) {
                     const auto* uv = reinterpret_cast<const float*>(uvBytes + i * uvStride);
                     v[7] = uv[0]; v[8] = uv[1];
                 }
+				// Copiar color si está presente
                 if (colors && colorBytes && colors->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT &&
                     (colors->type == TINYGLTF_TYPE_VEC3 || colors->type == TINYGLTF_TYPE_VEC4)) {
                     const auto* c = reinterpret_cast<const float*>(colorBytes + i * colorStride);
                     v[3] = c[0]; v[4] = c[1]; v[5] = c[2];
                     if (colors->type == TINYGLTF_TYPE_VEC4) v[6] = c[3];
-                }
+				}// Copiar normales si están presentes
                 if (normals && normalBytes && normals->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && normals->type == TINYGLTF_TYPE_VEC3) {
                     const auto* n = reinterpret_cast<const float*>(normalBytes + i * normalStride);
                     v[9] = n[0]; v[10] = n[1]; v[11] = n[2];
                 }
             }
-
+			// Obtener datos de índices y convertir a uint32_t si es necesario
             const auto& indices = model_->accessors[primitive.indices];
             size_t indexStride = 0;
             const unsigned char* indexBytes = accessorData(*model_, indices, indexStride);
@@ -216,6 +224,7 @@ bool GltfModel::load(const std::string& path)
             size_t indexSize = indices.count;
             if (indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT || indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
                 convertedIndices.reserve(indices.count);
+				// Convertir índices a uint32_t para OpenGL
                 for (size_t i = 0; i < indices.count; ++i) {
                     uint32_t value = 0;
                     if (indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
@@ -226,7 +235,7 @@ bool GltfModel::load(const std::string& path)
                 indexData = convertedIndices.data();
                 indexType = GL_UNSIGNED_INT;
             } else if (indices.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) continue;
-
+			// Si no hay normales, calcularlas a partir de las posiciones y los índices
             if (!normals || !normalBytes || normals->componentType != TINYGLTF_COMPONENT_TYPE_FLOAT || normals->type != TINYGLTF_TYPE_VEC3) {
                 auto readIndex = [&](size_t i) -> uint32_t {
                     if (indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
@@ -235,6 +244,7 @@ bool GltfModel::load(const std::string& path)
                         return *(indexBytes + i * indexStride);
                     return *reinterpret_cast<const uint32_t*>(indexBytes + i * indexStride);
                 };
+				// Calcular normales por cara y promediarlas para cada vértice
                 for (size_t i = 0; i + 2 < indices.count; i += 3) {
                     const uint32_t i0 = readIndex(i), i1 = readIndex(i + 1), i2 = readIndex(i + 2);
                     if (i0 >= positions.count || i1 >= positions.count || i2 >= positions.count) continue;
@@ -249,6 +259,7 @@ bool GltfModel::load(const std::string& path)
                         v[9] += faceNormal.x; v[10] += faceNormal.y; v[11] += faceNormal.z;
                     }
                 }
+				// Normalizar las normales acumuladas para cada vértice
                 for (size_t i = 0; i < positions.count; ++i) {
                     float* v = vertices.data() + i * vertexStride;
                     const glm::vec3 n(v[9], v[10], v[11]);
@@ -260,7 +271,7 @@ bool GltfModel::load(const std::string& path)
                     }
                 }
             }
-
+			// Crear buffers OpenGL para el primitivo
             PrimitiveGpu gpu;
             gpu.indexCount = static_cast<GLsizei>(indexSize);
             gpu.indexType = indexType;
@@ -284,19 +295,23 @@ bool GltfModel::load(const std::string& path)
             meshes_[meshIndex].primitives.push_back(gpu);
         }
     }
-    glBindVertexArray(0);
-
+	glBindVertexArray(0);// Desvincular VAO
+	// Calcular los límites del modelo para normalizarlo y centrarlo
     glm::vec3 minBounds(std::numeric_limits<float>::max());
     glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
     bool hasBounds = false;
+	// Recorrer la escena por defecto o la primera escena para calcular los límites
     if (model_->defaultScene >= 0 && static_cast<size_t>(model_->defaultScene) < model_->scenes.size()) {
         for (int node : model_->scenes[model_->defaultScene].nodes)
             collectNodeBounds(*model_, node, glm::mat4(1.0f), minBounds, maxBounds, hasBounds);
     } else if (!model_->scenes.empty()) {
+		// Si no hay escena por defecto, usar la primera escena
         for (int node : model_->scenes[0].nodes)
             collectNodeBounds(*model_, node, glm::mat4(1.0f), minBounds, maxBounds, hasBounds);
     }
+	// Calcular la matriz de normalización para escalar y centrar el modelo
     if (hasBounds) {
+		// Escalar el modelo para que quepa en un cubo de 3 unidades y centrarlo en el origen
         const glm::vec3 extent = maxBounds - minBounds;
         const float largest = std::max(extent.x, std::max(extent.y, extent.z));
         const float scale = largest > 0.0f ? 3.0f / largest : 1.0f;
@@ -330,7 +345,9 @@ bool GltfModel::load(const std::string& path)
 void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& projection,
                      const glm::vec3& cameraPosition)
 {
+	// Configurar uniformes y dibujar todos los elementos de la escena
     if (!loaded_) return;
+	// Configurar uniformes de shader si no se han configurado antes
     if (!uniformsCached_) {
         mvpLocation_ = glGetUniformLocation(program, "uMVP");
         modelLocation_ = glGetUniformLocation(program, "uModel");
@@ -346,26 +363,29 @@ void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& pro
         glUniform1i(glGetUniformLocation(program, "uEmissiveTexture"), 1);
         uniformsCached_ = true;
     }
-
+	// Configurar uniformes de cámara y estado de OpenGL
     glUniform3fv(cameraPositionLocation_, 1, glm::value_ptr(cameraPosition));
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
-
+	// Configurar texturas y estado de mezcla alfa según el material de cada primitivo
     GLuint boundBaseTexture = std::numeric_limits<GLuint>::max();
     GLuint boundEmissiveTexture = std::numeric_limits<GLuint>::max();
     int blendState = 0;
     size_t lastTransformGroup = std::numeric_limits<size_t>::max();
     for (const DrawItem& item : drawItems_) {
+		// Obtener el primitivo y material correspondientes al elemento de dibujo
         const PrimitiveGpu& primitive = meshes_[item.meshIndex].primitives[item.primitiveIndex];
         const MaterialGpu& material = primitive.material >= 0 && static_cast<size_t>(primitive.material) < materials_.size()
             ? materials_[primitive.material] : materials_[0];
         if (item.transformGroup != lastTransformGroup) {
+			// Configurar uniformes de transformación si el grupo de transformación ha cambiado
             const glm::mat4 mvp = projection * view * item.modelMatrix;
             glUniformMatrix4fv(mvpLocation_, 1, GL_FALSE, glm::value_ptr(mvp));
             glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, glm::value_ptr(item.modelMatrix));
             glUniformMatrix3fv(normalMatrixLocation_, 1, GL_FALSE, glm::value_ptr(item.normalMatrix));
             lastTransformGroup = item.transformGroup;
         }
+		// Configurar uniformes de material
         glUniform4fv(colorLocation_, 1, glm::value_ptr(material.baseColor));
         glUniform3fv(emissiveLocation_, 1, glm::value_ptr(material.emissive));
         glUniform1i(hasTextureLocation_, material.baseColorTexture != 0);
@@ -373,18 +393,22 @@ void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& pro
         glUniform1i(alphaMaskLocation_, material.alphaMask);
         glUniform1f(alphaCutoffLocation_, material.alphaCutoff);
         if (boundBaseTexture != material.baseColorTexture) {
+			// Configurar la textura base si es diferente de la última vinculada
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, material.baseColorTexture);
             boundBaseTexture = material.baseColorTexture;
         }
+		// Configurar la textura emisiva si es diferente de la última vinculada
         if (boundEmissiveTexture != material.emissiveTexture) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, material.emissiveTexture);
             boundEmissiveTexture = material.emissiveTexture;
         }
+		// Configurar el estado de mezcla alfa según el material
         const int nextBlendState = material.alphaBlend ? 1 : 0;
         if (nextBlendState != blendState) {
             if (nextBlendState) {
+				// Habilitar mezcla alfa para materiales transparentes
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                 glDepthMask(GL_FALSE);
@@ -404,12 +428,14 @@ void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& pro
 
 void GltfModel::collectDrawItems(int nodeIndex, const glm::mat4& parentModel)
 {
+	// Recorrer la jerarquía de nodos y recolectar elementos de dibujo con sus transformaciones
     if (!model_ || nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= model_->nodes.size()) return;
     const auto& node = model_->nodes[nodeIndex];
     const glm::mat4 transform = parentModel * nodeTransform(node);
     if (node.mesh >= 0 && static_cast<size_t>(node.mesh) < meshes_.size()) {
         const auto& primitives = meshes_[node.mesh].primitives;
         if (!primitives.empty()) {
+			// Calcular la matriz normal para transformar normales correctamente
             const glm::mat3 normal = glm::transpose(glm::inverse(glm::mat3(transform)));
             const size_t group = nextTransformGroup_++;
             for (size_t i = 0; i < primitives.size(); ++i)
@@ -421,11 +447,13 @@ void GltfModel::collectDrawItems(int nodeIndex, const glm::mat4& parentModel)
 
 void GltfModel::destroy()
 {
+	// Liberar buffers OpenGL de mallas y primitivos
     for (auto& mesh : meshes_) for (auto& primitive : mesh.primitives) {
         if (primitive.ebo) glDeleteBuffers(1, &primitive.ebo);
         if (primitive.vbo) glDeleteBuffers(1, &primitive.vbo);
         if (primitive.vao) glDeleteVertexArrays(1, &primitive.vao);
     }
+	// Liberar texturas OpenGL
     for (GLuint texture : imageTextures_) if (texture) glDeleteTextures(1, &texture);
     meshes_.clear(); drawItems_.clear(); imageTextures_.clear(); materials_.clear();
     nextTransformGroup_ = 0;

@@ -12,6 +12,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+// Función auxiliar para obtener un puntero a los datos de un accesor y su stride
 namespace {
 constexpr glm::vec3 kFocus(0.0f, 0.0f, 0.0f);
 constexpr glm::vec3 kUp(0.0f, 1.0f, 0.0f);
@@ -22,7 +23,7 @@ bool firstMouse = true;
 float lastX = 500.0f, lastY = 400.0f;
 float pathProgress = 0.0f;
 float freeYaw = 0.0f, freePitch = 0.1974f, freeRadius = 6.12f;
-
+// Función auxiliar para calcular la posición de la cámara a lo largo de una curva de Bezier
 glm::vec3 bezier(const glm::vec3& p0, const glm::vec3& p1,
                 const glm::vec3& p2, const glm::vec3& p3, float t)
 {
@@ -30,8 +31,9 @@ glm::vec3 bezier(const glm::vec3& p0, const glm::vec3& p1,
     return u*u*u*p0 + 3.0f*u*u*t*p1 + 3.0f*u*t*t*p2 + t*t*t*p3;
 }
 
-glm::vec3 bezierCameraPosition(float progress)
+glm::vec3 bezierCameraPosition(float progress) // progress en [0,1]
 {
+	// Definir los puntos de control de la curva de Bezier para el recorrido de la cámara
     constexpr float k = 3.3137085f;
     constexpr float y = 1.2f;
     static const glm::vec3 p[4][4] = {
@@ -40,11 +42,12 @@ glm::vec3 bezierCameraPosition(float progress)
         {{0,y,-6}, {-k,y,-6}, {-6,y,-k}, {-6,y,0}},
         {{-6,y,0}, {-6,y,k}, {-k,y,6}, {0,y,6}}
     };
+	// Calcular el segmento de la curva y el parámetro local t
     const float scaled = (progress - std::floor(progress)) * 4.0f;
     const int segment = glm::min(static_cast<int>(scaled), 3);
     return bezier(p[segment][0], p[segment][1], p[segment][2], p[segment][3], scaled - segment);
 }
-
+// Función auxiliar para actualizar la posición de la cámara en modo libre
 void updateFreeCameraPosition()
 {
     const float cp = std::cos(freePitch);
@@ -52,6 +55,7 @@ void updateFreeCameraPosition()
 }
 
 void keyCallback(GLFWwindow* window, int key, int, int action, int)
+// Función de callback para manejar eventos de teclado
 {
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_ESCAPE) {
@@ -68,7 +72,7 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int)
         cameraOnBezier = true;
     }
 }
-
+// Función de callback para manejar eventos de movimiento del mouse
 void cursorPositionCallback(GLFWwindow*, double xpos, double ypos)
 {
     if (!mouseCaptured) return;
@@ -85,7 +89,7 @@ void cursorPositionCallback(GLFWwindow*, double xpos, double ypos)
         updateFreeCameraPosition();
     }
 }
-
+// Función auxiliar para compilar un shader y verificar errores
 GLuint compileShader(GLenum type, const char* source)
 {
     GLuint shader = glCreateShader(type);
@@ -100,7 +104,7 @@ GLuint compileShader(GLenum type, const char* source)
     }
     return shader;
 }
-
+// Función auxiliar para crear un programa de shaders y verificar errores
 GLuint createProgram()
 {
     const char* vertexSource = R"glsl(#version 330 core
@@ -153,11 +157,13 @@ void main() {
     vec3 emissive = uEmissive * (uHasEmissiveTexture != 0 ? texture(uEmissiveTexture, vTexCoord).rgb : vec3(1.0));
     FragColor = vec4(phong + emissive, base.a);
 })glsl";
+	// Compilar y enlazar shaders
     GLuint vertex = compileShader(GL_VERTEX_SHADER, vertexSource);
     GLuint fragment = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
     if (!vertex || !fragment) {
         if (vertex) glDeleteShader(vertex); if (fragment) glDeleteShader(fragment); return 0;
     }
+	// Crear programa y verificar errores de enlace
     GLuint program = glCreateProgram();
     glAttachShader(program, vertex); glAttachShader(program, fragment); glLinkProgram(program);
     glDeleteShader(vertex); glDeleteShader(fragment);
@@ -168,10 +174,12 @@ void main() {
     }
     return program;
 }
+// Función auxiliar para calcular la posición de la cámara a lo largo de una curva de Bezier
 } // namespace
-
+// Función principal
 int main()
 {
+	// Inicializar GLFW y crear una ventana OpenGL
     if (!glfwInit()) { std::cerr << "No se pudo inicializar GLFW.\n"; return -1; }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -183,21 +191,22 @@ int main()
         std::cerr << "No se pudieron cargar las funciones de OpenGL.\n";
         glfwDestroyWindow(window); glfwTerminate(); return -1;
     }
+	// Configurar estado de OpenGL y GLFW
     glEnable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glfwSwapInterval(1);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, cursorPositionCallback);
     glfwSetKeyCallback(window, keyCallback);
     GLuint program = createProgram();
     if (!program) { glfwDestroyWindow(window); glfwTerminate(); return -1; }
-
+	// Cargar el modelo glTF del edificio de oficinas de Atlanta
     GltfModel building;
     if (!building.load("resources/atlanta_office/scene.gltf")) {
         std::cerr << building.error() << '\n'; glDeleteProgram(program);
         glfwDestroyWindow(window); glfwTerminate(); return -1;
-    }
+	}// Inicializar ImGui para la interfaz de usuario
     IMGUI_CHECKVERSION(); ImGui::CreateContext(); ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true); ImGui_ImplOpenGL3_Init("#version 330");
-
+	// Bucle principal de renderizado
     float previousTime = static_cast<float>(glfwGetTime());
     int projectionWidth = -1, projectionHeight = -1;
     glm::mat4 projection(1.0f);
@@ -208,7 +217,8 @@ int main()
         if (cameraOnBezier) {
             pathProgress = std::fmod(pathProgress + dt/25.0f, 1.0f);
             cameraPosition = bezierCameraPosition(pathProgress);
-        } else {
+		}
+		else {// Modo de cámara libre: actualizar posición según teclas W/A/S/D
             const float move = 3.0f * dt;
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) freeRadius -= move;
             if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) freeRadius += move;
@@ -217,7 +227,7 @@ int main()
             freeRadius = glm::clamp(freeRadius, 2.5f, 30.0f);
             updateFreeCameraPosition();
         }
-
+		// Configurar la proyección y el viewport según el tamaño de la ventana
         int width = 0, height = 0; glfwGetFramebufferSize(window, &width, &height);
         if (width <= 0 || height <= 0) { glfwWaitEventsTimeout(0.05); continue; }
         if (width != projectionWidth || height != projectionHeight) {
@@ -225,12 +235,13 @@ int main()
             projection = glm::perspective(glm::radians(60.0f),
                 static_cast<float>(width)/static_cast<float>(height), 0.1f, 100.0f);
         }
+		// Limpiar el framebuffer y dibujar el modelo
         glViewport(0, 0, width, height);
         glClearColor(0.07f, 0.13f, 0.17f, 1.0f); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         const glm::mat4 view = glm::lookAt(cameraPosition, kFocus, kUp);
         glUseProgram(program);
         building.draw(program, view, projection, cameraPosition);
-
+		// Dibujar la interfaz de usuario con ImGui
         ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
         ImGui::Begin("Camara y controles");
         ImGui::Text("Modelo glTF: edificio de oficinas de Atlanta");
@@ -240,7 +251,7 @@ int main()
         ImGui::Text("Esc: liberar/capturar cursor"); ImGui::End();
         ImGui::Render(); ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
-    }
+	}// Limpiar recursos y salir
     ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown(); ImGui::DestroyContext();
     building.destroy(); glDeleteProgram(program); glfwDestroyWindow(window); glfwTerminate();
     return 0;
