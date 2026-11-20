@@ -2,6 +2,11 @@
 
 Aplicación de escritorio en C++ que renderiza un edificio de oficinas en formato glTF con OpenGL. El proyecto está preparado para abrirse y ejecutarse desde Visual Studio.
 
+## Datos del proyecto
+
+- **Nombre:** Valentina Cardozo Peña
+- **Código:** 6014357
+
 ## Requisitos
 
 - Windows 10/11.
@@ -21,9 +26,30 @@ El directorio de trabajo de depuración está configurado como la carpeta del pr
 
 ## Controles
 
-- **W**, **A**, **S**, **D**: mover la cámara.
-- **Mouse**: mirar alrededor.
+- **W/S**: acercar o alejar la cámara en modo libre.
+- **A/D**: rodear el edificio en modo libre.
+- **C**: salir del recorrido Bézier y activar la órbita manual.
+- **V**: regresar al recorrido Bézier, continuando desde donde se pausó.
+- **Mouse**: orbitar alrededor del edificio en modo libre.
 - **Esc**: alternar entre capturar y liberar el cursor.
+
+La cámara inicia recorriendo una curva Bézier cerrada alrededor del edificio. En ambos modos apunta al centro normalizado del modelo.
+
+## Arquitectura
+
+La aplicación separa la ventana, la cámara y el ciclo de render en `Main.cpp`, de la carga de la escena en `GltfModel.cpp` y `GltfModel.h`. TinyGLTF lee la escena, sus mallas y materiales; OpenGL crea los buffers, texturas y shaders; GLFW procesa las entradas y Dear ImGui muestra las instrucciones.
+
+En cada fotograma se calculan las matrices de **modelo** (normalización glTF y transformaciones de nodos), **vista** (cámara enfocada al edificio) y **proyección** (perspectiva). El shader transforma las normales con la matriz normal, calculada como la inversa transpuesta de la matriz de modelo. La iluminación Phong usa una luz puntual colocada en la cámara, con componentes ambiental, difusa y especular; la luz se actualiza al moverse la cámara.
+
+```text
+Main.cpp                 Ventana, controles, recorrido Bézier y matrices de cámara
+GltfModel.cpp/.h         Lectura glTF, buffers, materiales y dibujo
+shaders embebidos        Transformación de vértices e iluminación Phong
+GLFW / GLAD / GLM        Ventana, funciones OpenGL y operaciones matemáticas
+Dear ImGui               Panel de controles
+TinyGLTF                 Lectura de escena y materiales glTF
+resources/atlanta_office Modelo, geometría binaria, texturas y licencia
+```
 
 ## Modelo glTF
 
@@ -39,14 +65,3 @@ Mantén juntos estos archivos y conserva sus rutas relativas para que TinyGLTF p
 ### Atribución del modelo
 
 Este trabajo se basa en **"[FREE] Atlanta, Corperate Office Building"**, creado por [99.Miles](https://sketchfab.com/3d-models/free-atlanta-corperate-office-building-d96380fb001345cca9a9be121f3e43d5), bajo licencia [Creative Commons Attribution 4.0 (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). Se permite el uso comercial con atribución. Consulta `resources/atlanta_office/license.txt` para el texto de crédito proporcionado con el recurso.
-
-## Estructura principal
-
-```text
-YoutubeOpenGL.slnx       Solución de Visual Studio
-YoutubeOpenGL.vcxproj    Configuración del proyecto C++
-Main.cpp                 Inicialización, render y controles
-GltfModel.cpp/.h         Carga y dibujo del modelo glTF
-Librerias/               Dependencias incluidas
-resources/atlanta_office/Modelo glTF y recursos asociados
-```

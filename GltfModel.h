@@ -10,7 +10,8 @@ namespace tinygltf { class Model; }
 class GltfModel {
 public:
     bool load(const std::string& path);
-    void draw(GLuint program, const glm::mat4& viewProjection);
+    void draw(GLuint program, const glm::mat4& view, const glm::mat4& projection,
+              const glm::vec3& cameraPosition);
     void destroy();
     const std::string& error() const { return error_; }
     bool isLoaded() const { return loaded_; }
@@ -44,6 +45,9 @@ private:
     bool loaded_ = false;
     bool uniformsCached_ = false;
     GLint mvpLocation_ = -1;
+    GLint modelLocation_ = -1;
+    GLint normalMatrixLocation_ = -1;
+    GLint cameraPositionLocation_ = -1;
     GLint colorLocation_ = -1;
     GLint emissiveLocation_ = -1;
     GLint hasTextureLocation_ = -1;
@@ -51,5 +55,6 @@ private:
     GLint alphaMaskLocation_ = -1;
     GLint alphaCutoffLocation_ = -1;
 
-    void drawNode(int nodeIndex, const glm::mat4& parent, GLuint program);
+    void drawNode(int nodeIndex, const glm::mat4& parentModel, const glm::mat4& view,
+                  const glm::mat4& projection, GLuint program);
 };

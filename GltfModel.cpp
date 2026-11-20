@@ -178,11 +178,16 @@ bool GltfModel::load(const std::string& path)
             const tinygltf::Accessor* colors = colorIt == primitive.attributes.end() ? nullptr : &model_->accessors[colorIt->second];
             size_t colorStride = 0;
             const unsigned char* colorBytes = colors ? accessorData(*model_, *colors, colorStride) : nullptr;
+            const auto normalIt = primitive.attributes.find("NORMAL");
+            const tinygltf::Accessor* normals = normalIt == primitive.attributes.end() ? nullptr : &model_->accessors[normalIt->second];
+            size_t normalStride = 0;
+            const unsigned char* normalBytes = normals ? accessorData(*model_, *normals, normalStride) : nullptr;
 
-            std::vector<float> vertices(positions.count * 9, 0.0f);
+            constexpr size_t vertexStride = 12;
+            std::vector<float> vertices(positions.count * vertexStride, 0.0f);
             for (size_t i = 0; i < positions.count; ++i) {
                 const auto* p = reinterpret_cast<const float*>(positionBytes + i * positionStride);
-                float* v = vertices.data() + i * 9;
+                float* v = vertices.data() + i * vertexStride;
                 v[0] = p[0]; v[1] = p[1]; v[2] = p[2];
                 v[3] = v[4] = v[5] = v[6] = 1.0f;
                 if (uvs && uvBytes && uvs->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && uvs->type == TINYGLTF_TYPE_VEC2) {
@@ -194,6 +199,10 @@ bool GltfModel::load(const std::string& path)
                     const auto* c = reinterpret_cast<const float*>(colorBytes + i * colorStride);
                     v[3] = c[0]; v[4] = c[1]; v[5] = c[2];
                     if (colors->type == TINYGLTF_TYPE_VEC4) v[6] = c[3];
+                }
+                if (normals && normalBytes && normals->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && normals->type == TINYGLTF_TYPE_VEC3) {
+                    const auto* n = reinterpret_cast<const float*>(normalBytes + i * normalStride);
+                    v[9] = n[0]; v[10] = n[1]; v[11] = n[2];
                 }
             }
 
@@ -218,6 +227,40 @@ bool GltfModel::load(const std::string& path)
                 indexType = GL_UNSIGNED_INT;
             } else if (indices.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) continue;
 
+            if (!normals || !normalBytes || normals->componentType != TINYGLTF_COMPONENT_TYPE_FLOAT || normals->type != TINYGLTF_TYPE_VEC3) {
+                auto readIndex = [&](size_t i) -> uint32_t {
+                    if (indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                        return *reinterpret_cast<const uint16_t*>(indexBytes + i * indexStride);
+                    if (indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+                        return *(indexBytes + i * indexStride);
+                    return *reinterpret_cast<const uint32_t*>(indexBytes + i * indexStride);
+                };
+                for (size_t i = 0; i + 2 < indices.count; i += 3) {
+                    const uint32_t i0 = readIndex(i), i1 = readIndex(i + 1), i2 = readIndex(i + 2);
+                    if (i0 >= positions.count || i1 >= positions.count || i2 >= positions.count) continue;
+                    float* v0 = vertices.data() + i0 * vertexStride;
+                    float* v1 = vertices.data() + i1 * vertexStride;
+                    float* v2 = vertices.data() + i2 * vertexStride;
+                    const glm::vec3 p0(v0[0], v0[1], v0[2]);
+                    const glm::vec3 p1(v1[0], v1[1], v1[2]);
+                    const glm::vec3 p2(v2[0], v2[1], v2[2]);
+                    const glm::vec3 faceNormal = glm::cross(p1 - p0, p2 - p0);
+                    for (float* v : {v0, v1, v2}) {
+                        v[9] += faceNormal.x; v[10] += faceNormal.y; v[11] += faceNormal.z;
+                    }
+                }
+                for (size_t i = 0; i < positions.count; ++i) {
+                    float* v = vertices.data() + i * vertexStride;
+                    const glm::vec3 n(v[9], v[10], v[11]);
+                    if (glm::dot(n, n) > 1e-12f) {
+                        const glm::vec3 normalized = glm::normalize(n);
+                        v[9] = normalized.x; v[10] = normalized.y; v[11] = normalized.z;
+                    } else {
+                        v[9] = 0.0f; v[10] = 1.0f; v[11] = 0.0f;
+                    }
+                }
+            }
+
             PrimitiveGpu gpu;
             gpu.indexCount = static_cast<GLsizei>(indexSize);
             gpu.indexType = indexType;
@@ -230,12 +273,14 @@ bool GltfModel::load(const std::string& path)
             glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), GL_STATIC_DRAW);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gpu.ebo);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indexSize * sizeof(uint32_t)), indexData, GL_STATIC_DRAW);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), nullptr);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride * sizeof(float)), nullptr);
             glEnableVertexAttribArray(0);
-            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride * sizeof(float)), reinterpret_cast<void*>(3 * sizeof(float)));
             glEnableVertexAttribArray(1);
-            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(7 * sizeof(float)));
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride * sizeof(float)), reinterpret_cast<void*>(7 * sizeof(float)));
             glEnableVertexAttribArray(2);
+            glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride * sizeof(float)), reinterpret_cast<void*>(9 * sizeof(float)));
+            glEnableVertexAttribArray(3);
             meshes_[meshIndex].primitives.push_back(gpu);
         }
     }
@@ -265,11 +310,15 @@ bool GltfModel::load(const std::string& path)
     return true;
 }
 
-void GltfModel::draw(GLuint program, const glm::mat4& viewProjection)
+void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& projection,
+                     const glm::vec3& cameraPosition)
 {
     if (!loaded_ || !model_) return;
     if (!uniformsCached_) {
         mvpLocation_ = glGetUniformLocation(program, "uMVP");
+        modelLocation_ = glGetUniformLocation(program, "uModel");
+        normalMatrixLocation_ = glGetUniformLocation(program, "uNormalMatrix");
+        cameraPositionLocation_ = glGetUniformLocation(program, "uCameraPosition");
         colorLocation_ = glGetUniformLocation(program, "uBaseColor");
         emissiveLocation_ = glGetUniformLocation(program, "uEmissive");
         hasTextureLocation_ = glGetUniformLocation(program, "uHasTexture");
@@ -281,28 +330,36 @@ void GltfModel::draw(GLuint program, const glm::mat4& viewProjection)
         uniformsCached_ = true;
     }
 
-    glm::mat4 root = viewProjection * normalization_;
+    glUniform3fv(cameraPositionLocation_, 1, glm::value_ptr(cameraPosition));
+    glm::mat4 root = normalization_;
     if (model_->defaultScene >= 0 && static_cast<size_t>(model_->defaultScene) < model_->scenes.size()) {
-        for (int node : model_->scenes[model_->defaultScene].nodes) drawNode(node, root, program);
+        for (int node : model_->scenes[model_->defaultScene].nodes) drawNode(node, root, view, projection, program);
     } else if (!model_->scenes.empty()) {
-        for (int node : model_->scenes[0].nodes) drawNode(node, root, program);
+        for (int node : model_->scenes[0].nodes) drawNode(node, root, view, projection, program);
     } else {
         for (size_t i = 0; i < model_->nodes.size(); ++i)
-            if (model_->nodes[i].mesh >= 0) drawNode(static_cast<int>(i), root, program);
+            if (model_->nodes[i].mesh >= 0) drawNode(static_cast<int>(i), root, view, projection, program);
     }
 }
 
-void GltfModel::drawNode(int nodeIndex, const glm::mat4& parent, GLuint program)
+void GltfModel::drawNode(int nodeIndex, const glm::mat4& parentModel, const glm::mat4& view,
+                         const glm::mat4& projection, GLuint program)
 {
     if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= model_->nodes.size()) return;
     const auto& node = model_->nodes[nodeIndex];
-    const glm::mat4 transform = parent * nodeTransform(node);
+    const glm::mat4 transform = parentModel * nodeTransform(node);
     if (node.mesh >= 0 && static_cast<size_t>(node.mesh) < meshes_.size()) {
         for (const auto& primitive : meshes_[node.mesh].primitives) {
             MaterialGpu material;
             if (primitive.material >= 0 && static_cast<size_t>(primitive.material) < materials_.size())
                 material = materials_[primitive.material];
-            glUniformMatrix4fv(mvpLocation_, 1, GL_FALSE, glm::value_ptr(transform));
+            // Las matrices de modelo, vista y proyeccion se combinan en ese orden.
+            // La normal usa la inversa transpuesta para mantener su orientacion bajo escala.
+            const glm::mat4 mvp = projection * view * transform;
+            const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(transform)));
+            glUniformMatrix4fv(mvpLocation_, 1, GL_FALSE, glm::value_ptr(mvp));
+            glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, glm::value_ptr(transform));
+            glUniformMatrix3fv(normalMatrixLocation_, 1, GL_FALSE, glm::value_ptr(normalMatrix));
             glUniform4fv(colorLocation_, 1, glm::value_ptr(material.baseColor));
             glUniform3fv(emissiveLocation_, 1, glm::value_ptr(material.emissive));
             glUniform1i(hasTextureLocation_, material.baseColorTexture != 0);
@@ -328,7 +385,7 @@ void GltfModel::drawNode(int nodeIndex, const glm::mat4& parent, GLuint program)
     }
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
-    for (int child : node.children) drawNode(child, transform, program);
+    for (int child : node.children) drawNode(child, transform, view, projection, program);
 }
 
 void GltfModel::destroy()
