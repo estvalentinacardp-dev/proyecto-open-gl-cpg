@@ -39,6 +39,8 @@ La cámara inicia recorriendo una curva Bézier cerrada alrededor del edificio. 
 
 La aplicación separa la ventana, la cámara y el ciclo de render en `Main.cpp`, de la carga de la escena en `GltfModel.cpp` y `GltfModel.h`. TinyGLTF lee la escena, sus mallas y materiales; OpenGL crea los buffers, texturas y shaders; GLFW procesa las entradas y Dear ImGui muestra las instrucciones.
 
+Durante la carga, la jerarquía y las matrices de transformación del modelo se aplanan en una lista de dibujo. Así se evitan recorridos recursivos y cálculos de matrices inversas en cada fotograma; después de copiar los recursos a la GPU, se libera la copia de CPU de TinyGLTF. El render reutiliza enlaces de texturas y estados de transparencia consecutivos.
+
 En cada fotograma se calculan las matrices de **modelo** (normalización glTF y transformaciones de nodos), **vista** (cámara enfocada al edificio) y **proyección** (perspectiva). El shader transforma las normales con la matriz normal, calculada como la inversa transpuesta de la matriz de modelo. La iluminación Phong usa una luz puntual colocada en la cámara, con componentes ambiental, difusa y especular; la luz se actualiza al moverse la cámara.
 
 ```text

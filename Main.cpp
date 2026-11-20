@@ -34,7 +34,7 @@ glm::vec3 bezierCameraPosition(float progress)
 {
     constexpr float k = 3.3137085f;
     constexpr float y = 1.2f;
-    const glm::vec3 p[4][4] = {
+    static const glm::vec3 p[4][4] = {
         {{0,y,6}, {k,y,6}, {6,y,k}, {6,y,0}},
         {{6,y,0}, {6,y,-k}, {k,y,-6}, {0,y,-6}},
         {{0,y,-6}, {-k,y,-6}, {-6,y,-k}, {-6,y,0}},
@@ -199,6 +199,8 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true); ImGui_ImplOpenGL3_Init("#version 330");
 
     float previousTime = static_cast<float>(glfwGetTime());
+    int projectionWidth = -1, projectionHeight = -1;
+    glm::mat4 projection(1.0f);
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         const float now = static_cast<float>(glfwGetTime());
@@ -217,10 +219,14 @@ int main()
         }
 
         int width = 0, height = 0; glfwGetFramebufferSize(window, &width, &height);
-        height = glm::max(height, 1); glViewport(0, 0, width, height);
+        if (width <= 0 || height <= 0) { glfwWaitEventsTimeout(0.05); continue; }
+        if (width != projectionWidth || height != projectionHeight) {
+            projectionWidth = width; projectionHeight = height;
+            projection = glm::perspective(glm::radians(60.0f),
+                static_cast<float>(width)/static_cast<float>(height), 0.1f, 100.0f);
+        }
+        glViewport(0, 0, width, height);
         glClearColor(0.07f, 0.13f, 0.17f, 1.0f); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        const glm::mat4 projection = glm::perspective(glm::radians(60.0f),
-            static_cast<float>(width)/static_cast<float>(height), 0.1f, 100.0f);
         const glm::mat4 view = glm::lookAt(cameraPosition, kFocus, kUp);
         glUseProgram(program);
         building.draw(program, view, projection, cameraPosition);

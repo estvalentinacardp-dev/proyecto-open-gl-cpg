@@ -2,6 +2,7 @@
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -35,9 +36,18 @@ private:
         bool alphaMask = false;
         float alphaCutoff = 0.5f;
     };
+    struct DrawItem {
+        size_t meshIndex = 0;
+        size_t primitiveIndex = 0;
+        size_t transformGroup = 0;
+        glm::mat4 modelMatrix = glm::mat4(1.0f);
+        glm::mat3 normalMatrix = glm::mat3(1.0f);
+    };
 
     tinygltf::Model* model_ = nullptr;
     std::vector<MeshGpu> meshes_;
+    std::vector<DrawItem> drawItems_;
+    size_t nextTransformGroup_ = 0;
     std::vector<GLuint> imageTextures_;
     std::vector<MaterialGpu> materials_;
     glm::mat4 normalization_ = glm::mat4(1.0f);
@@ -55,6 +65,5 @@ private:
     GLint alphaMaskLocation_ = -1;
     GLint alphaCutoffLocation_ = -1;
 
-    void drawNode(int nodeIndex, const glm::mat4& parentModel, const glm::mat4& view,
-                  const glm::mat4& projection, GLuint program);
+    void collectDrawItems(int nodeIndex, const glm::mat4& parentModel);
 };

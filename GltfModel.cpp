@@ -141,7 +141,7 @@ bool GltfModel::load(const std::string& path)
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-    materials_.resize(model_->materials.size());
+    materials_.resize(std::max<size_t>(1, model_->materials.size()));
     for (size_t i = 0; i < model_->materials.size(); ++i) {
         const auto& source = model_->materials[i];
         auto& target = materials_[i];
@@ -304,16 +304,33 @@ bool GltfModel::load(const std::string& path)
             glm::translate(glm::mat4(1.0f), -(minBounds + maxBounds) * 0.5f);
     }
 
+    // La jerarquia glTF y las matrices estaticas se aplanan una sola vez.
+    // El render no vuelve a recorrer nodos ni a invertir matrices cada fotograma.
+    drawItems_.clear();
+    nextTransformGroup_ = 0;
+    const glm::mat4 rootModel = normalization_;
+    if (model_->defaultScene >= 0 && static_cast<size_t>(model_->defaultScene) < model_->scenes.size()) {
+        for (int node : model_->scenes[model_->defaultScene].nodes) collectDrawItems(node, rootModel);
+    } else if (!model_->scenes.empty()) {
+        for (int node : model_->scenes[0].nodes) collectDrawItems(node, rootModel);
+    } else {
+        for (size_t i = 0; i < model_->nodes.size(); ++i)
+            if (model_->nodes[i].mesh >= 0) collectDrawItems(static_cast<int>(i), rootModel);
+    }
+
     loaded_ = true;
     std::cout << "Modelo glTF cargado: " << model_->meshes.size() << " mallas, "
               << model_->materials.size() << " materiales, " << model_->images.size() << " texturas\n";
+    // Las mallas y texturas ya residen en GPU; liberar la copia CPU de TinyGLTF ahorra RAM.
+    delete model_;
+    model_ = nullptr;
     return true;
 }
 
 void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& projection,
                      const glm::vec3& cameraPosition)
 {
-    if (!loaded_ || !model_) return;
+    if (!loaded_) return;
     if (!uniformsCached_) {
         mvpLocation_ = glGetUniformLocation(program, "uMVP");
         modelLocation_ = glGetUniformLocation(program, "uModel");
@@ -331,46 +348,43 @@ void GltfModel::draw(GLuint program, const glm::mat4& view, const glm::mat4& pro
     }
 
     glUniform3fv(cameraPositionLocation_, 1, glm::value_ptr(cameraPosition));
-    glm::mat4 root = normalization_;
-    if (model_->defaultScene >= 0 && static_cast<size_t>(model_->defaultScene) < model_->scenes.size()) {
-        for (int node : model_->scenes[model_->defaultScene].nodes) drawNode(node, root, view, projection, program);
-    } else if (!model_->scenes.empty()) {
-        for (int node : model_->scenes[0].nodes) drawNode(node, root, view, projection, program);
-    } else {
-        for (size_t i = 0; i < model_->nodes.size(); ++i)
-            if (model_->nodes[i].mesh >= 0) drawNode(static_cast<int>(i), root, view, projection, program);
-    }
-}
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
 
-void GltfModel::drawNode(int nodeIndex, const glm::mat4& parentModel, const glm::mat4& view,
-                         const glm::mat4& projection, GLuint program)
-{
-    if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= model_->nodes.size()) return;
-    const auto& node = model_->nodes[nodeIndex];
-    const glm::mat4 transform = parentModel * nodeTransform(node);
-    if (node.mesh >= 0 && static_cast<size_t>(node.mesh) < meshes_.size()) {
-        for (const auto& primitive : meshes_[node.mesh].primitives) {
-            MaterialGpu material;
-            if (primitive.material >= 0 && static_cast<size_t>(primitive.material) < materials_.size())
-                material = materials_[primitive.material];
-            // Las matrices de modelo, vista y proyeccion se combinan en ese orden.
-            // La normal usa la inversa transpuesta para mantener su orientacion bajo escala.
-            const glm::mat4 mvp = projection * view * transform;
-            const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(transform)));
+    GLuint boundBaseTexture = std::numeric_limits<GLuint>::max();
+    GLuint boundEmissiveTexture = std::numeric_limits<GLuint>::max();
+    int blendState = 0;
+    size_t lastTransformGroup = std::numeric_limits<size_t>::max();
+    for (const DrawItem& item : drawItems_) {
+        const PrimitiveGpu& primitive = meshes_[item.meshIndex].primitives[item.primitiveIndex];
+        const MaterialGpu& material = primitive.material >= 0 && static_cast<size_t>(primitive.material) < materials_.size()
+            ? materials_[primitive.material] : materials_[0];
+        if (item.transformGroup != lastTransformGroup) {
+            const glm::mat4 mvp = projection * view * item.modelMatrix;
             glUniformMatrix4fv(mvpLocation_, 1, GL_FALSE, glm::value_ptr(mvp));
-            glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, glm::value_ptr(transform));
-            glUniformMatrix3fv(normalMatrixLocation_, 1, GL_FALSE, glm::value_ptr(normalMatrix));
-            glUniform4fv(colorLocation_, 1, glm::value_ptr(material.baseColor));
-            glUniform3fv(emissiveLocation_, 1, glm::value_ptr(material.emissive));
-            glUniform1i(hasTextureLocation_, material.baseColorTexture != 0);
-            glUniform1i(hasEmissiveLocation_, material.emissiveTexture != 0);
-            glUniform1i(alphaMaskLocation_, material.alphaMask);
-            glUniform1f(alphaCutoffLocation_, material.alphaCutoff);
+            glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, glm::value_ptr(item.modelMatrix));
+            glUniformMatrix3fv(normalMatrixLocation_, 1, GL_FALSE, glm::value_ptr(item.normalMatrix));
+            lastTransformGroup = item.transformGroup;
+        }
+        glUniform4fv(colorLocation_, 1, glm::value_ptr(material.baseColor));
+        glUniform3fv(emissiveLocation_, 1, glm::value_ptr(material.emissive));
+        glUniform1i(hasTextureLocation_, material.baseColorTexture != 0);
+        glUniform1i(hasEmissiveLocation_, material.emissiveTexture != 0);
+        glUniform1i(alphaMaskLocation_, material.alphaMask);
+        glUniform1f(alphaCutoffLocation_, material.alphaCutoff);
+        if (boundBaseTexture != material.baseColorTexture) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, material.baseColorTexture);
+            boundBaseTexture = material.baseColorTexture;
+        }
+        if (boundEmissiveTexture != material.emissiveTexture) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, material.emissiveTexture);
-            if (material.alphaBlend) {
+            boundEmissiveTexture = material.emissiveTexture;
+        }
+        const int nextBlendState = material.alphaBlend ? 1 : 0;
+        if (nextBlendState != blendState) {
+            if (nextBlendState) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                 glDepthMask(GL_FALSE);
@@ -378,14 +392,31 @@ void GltfModel::drawNode(int nodeIndex, const glm::mat4& parentModel, const glm:
                 glDisable(GL_BLEND);
                 glDepthMask(GL_TRUE);
             }
-            glBindVertexArray(primitive.vao);
-            glDrawElements(GL_TRIANGLES, primitive.indexCount, primitive.indexType, nullptr);
-            glBindVertexArray(0);
+            blendState = nextBlendState;
         }
+        glBindVertexArray(primitive.vao);
+        glDrawElements(GL_TRIANGLES, primitive.indexCount, primitive.indexType, nullptr);
     }
+    glBindVertexArray(0);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
-    for (int child : node.children) drawNode(child, transform, view, projection, program);
+}
+
+void GltfModel::collectDrawItems(int nodeIndex, const glm::mat4& parentModel)
+{
+    if (!model_ || nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= model_->nodes.size()) return;
+    const auto& node = model_->nodes[nodeIndex];
+    const glm::mat4 transform = parentModel * nodeTransform(node);
+    if (node.mesh >= 0 && static_cast<size_t>(node.mesh) < meshes_.size()) {
+        const auto& primitives = meshes_[node.mesh].primitives;
+        if (!primitives.empty()) {
+            const glm::mat3 normal = glm::transpose(glm::inverse(glm::mat3(transform)));
+            const size_t group = nextTransformGroup_++;
+            for (size_t i = 0; i < primitives.size(); ++i)
+                drawItems_.push_back({static_cast<size_t>(node.mesh), i, group, transform, normal});
+        }
+    }
+    for (int child : node.children) collectDrawItems(child, transform);
 }
 
 void GltfModel::destroy()
@@ -396,7 +427,8 @@ void GltfModel::destroy()
         if (primitive.vao) glDeleteVertexArrays(1, &primitive.vao);
     }
     for (GLuint texture : imageTextures_) if (texture) glDeleteTextures(1, &texture);
-    meshes_.clear(); imageTextures_.clear(); materials_.clear();
+    meshes_.clear(); drawItems_.clear(); imageTextures_.clear(); materials_.clear();
+    nextTransformGroup_ = 0;
     delete model_; model_ = nullptr;
     loaded_ = false;
     uniformsCached_ = false;
